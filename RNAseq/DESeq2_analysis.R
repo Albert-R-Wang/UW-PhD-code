@@ -30,7 +30,7 @@ dds
 # filter by sum of counts
 keep <- rowSums(counts(dds)) >= 10
 dds <- dds[keep,]
-# filter by ensuring at least X samples with a count of 10 or more
+# alternative option: filter by ensuring at least X samples with a count of 10 or more
 x = ncol(cts)*0.2 # 20% of the number of samples
 keep <- rowSums(counts(dds) >= 10) >= X
 dds <- dds[keep,]
@@ -61,11 +61,43 @@ fileName = tools::file_path_sans_ext(fileName) #remove extension
 write.csv(as.data.frame(resLFC), 
           file=paste("DESeq2Result_", fileName, ".csv", sep=""))
 
-#### Count data transformations ####
-vsd <- vst(dds, blind=FALSE)
-#rld <- rlog(dds, blind=FALSE)
-head(assay(vsd), 3)
 
 nc <- counts(dds, normalized = T)
 write.csv(as.data.frame(nc), 
           file=paste("DESeq2NormCount_", fileName, ".csv", sep=""))
+
+#### Differential expressed gene (DEG) threshold ####
+FC = 2 # log2 fold change
+adjp = 0.01 # adjusted p-values
+
+# Determine significant DEGs based on fold-change and adjusted p-value cut-off
+sigGenes <- rownames(subset(resLFC, (abs(log2FoldChange)>=FC & padj<=adjp )))
+
+# Extract RNAseq data for the significant genes
+sig.res.DE = subset(resLFC, rownames(resLFC) %in% sigGenes)
+
+
+#### Variance Stablizing Transformation (VST) ####
+# Adjusts for sequencing depth and stabilizes variance across the range of mean values.
+# This transformation is important for visualization and clustering, as it reduces the influence of highly variable genes and makes expression values more comparable across samples.
+vsd = vst(dds, blind = F) #transform counts into log2 scale (modeled to stablize variance) for visualization
+
+# Extract the matrix of VST-transformed values
+vst_mat = assay(vsd)
+sig.vst_mat = subset(vst_mat, rownames(vst_mat) %in% sigGenes)
+
+
+#### Volcano plot ####
+vol = resLFC %>% filter(!is.na(padj)) # Exclude genes with NA padj
+# Determine which genes are upregulated, downregulated, or not significant (NS) based on the DEG cutoff
+vol$group = with(vol, ifelse(padj < adjp & log2FoldChange > FC, "Upregulated",
+                             ifelse(padj < adjp & log2FoldChange < -FC, "Downregulated", "NS")))
+numDEG = table(vol$group) # Count the number of genes that are upregulated, downregulated, or NS
+
+ggplot(vol, aes(x=log2FoldChange, y=-log10(padj), color = group)) + geom_point(size = 2, alpha = 0.75) +
+  scale_color_manual(values = c("Upregulated" = "red3", "Downregulated" = "royalblue3", "NS" = "gray20")) +
+  annotate("text", x = max(vol$log2FoldChange), y = max(-log10(vol$padj), na.rm = TRUE), 
+           label = paste("Upregulated:", numDEG["Upregulated"]), color = "red3", hjust = 1) +
+  annotate("text", x = min(vol$log2FoldChange), y = max(-log10(vol$padj), na.rm = TRUE), 
+           label = paste("Downregulated:", numDEG["Downregulated"]), color = "royalblue3", hjust = 0) +
+  theme_minimal()
