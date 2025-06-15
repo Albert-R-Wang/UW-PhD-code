@@ -1,11 +1,16 @@
 # https://bioconductor.org/packages/release/bioc/html/DESeq2.html
 
+library(DESeq2)
+library(dplyr)
+library(ggplot2)
+
+
 #### Data import ####
-## import count data (NSCLC_data_RNA_counts_nameCorrected_Adeno.txt or NSCLC_data_RNA_counts_nameCorrected_Adeno_BTonly.txt)
+## import count data (DESeq2_example_counts.txt)
 countFile <- file.choose()
 cts <- read.table(countFile,header=TRUE,row.names=1 ,sep = "\t", quote="\"", stringsAsFactors = FALSE, check.names = FALSE)
 
-## import sample information
+## import sample information (DESeq2_sample_info.txt)
 annFile <- file.choose()
 coldata <- read.table(annFile,header=TRUE,row.names=1 ,sep = "\t", quote="\"", stringsAsFactors = FALSE, check.names = FALSE)
 
@@ -16,10 +21,10 @@ all(rownames(coldata) %in% colnames(cts)) # check if naming is consistent
 cts <- cts[, rownames(coldata)] #reorder the count matrix to match the order of sample information file
 all(rownames(coldata) == colnames(cts)) # check if order is the same
 
-library("DESeq2")
+
 dds <- DESeqDataSetFromMatrix(countData = cts,
                               colData = coldata,
-                              design = ~ condition) #specify a column called "condition" in the sample information file. For example, "treated" and "untreated"
+                              design = ~ Group) #specify a column called "Group" in the sample information file. For example, "treated" and "untreated"
 dds
 # can add additional feature data as needed
 #featureData <- data.frame(gene=rownames(cts))
@@ -27,17 +32,16 @@ dds
 
 #### Pre-filtering ####
 # it's not necessary to pre-filter low count genes. Two useful reasons: 1) reduce memory size of the dds data object, thus increase speed within DESeq2, and 2) improve visualizations as low counts gene are not plotted
-# filter by sum of counts
+## filter by sum of counts
 keep <- rowSums(counts(dds)) >= 10
 dds <- dds[keep,]
-# alternative option: filter by ensuring at least X samples with a count of 10 or more
+## Alternative option: filter by ensuring at least X samples with a count of 10 or more
 x = ncol(cts)*0.2 # 20% of the number of samples
 keep <- rowSums(counts(dds) >= 10) >= X
 dds <- dds[keep,]
 
 #### factor levels ####
-dds$condition <- relevel(dds$condition, ref = "High Immune Cluster") #specify reference level (ex. "untreated")
-#dds$condition <- relevel(dds$condition, ref = "Lung Primary Tumor")
+dds$condition <- relevel(dds$Group, ref = "Lung Primary Tumor") #specify reference level (ex. "untreated")
 
 #### Differential expression analysis ####
 dds <- DESeq(dds, betaPrior = F)
@@ -56,9 +60,13 @@ resLFC
 
 
 #### Export results ####
+res.DE = as.data.frame(resLFC)
+rownames(res.DE) <- gsub("\\.", "-", rownames(res.DE)) #DESeq2 sets the gene name with "." instead of "-" (ex. HLA.E instead of HLA-E). Here change gene names with "." to "-" (i.e. HLA.E becomes HLA-E)
+
+
 fileName = basename(countFile) #get file name
 fileName = tools::file_path_sans_ext(fileName) #remove extension
-write.csv(as.data.frame(resLFC), 
+write.csv(res.DE, 
           file=paste("DESeq2Result_", fileName, ".csv", sep=""))
 
 
@@ -67,14 +75,14 @@ write.csv(as.data.frame(nc),
           file=paste("DESeq2NormCount_", fileName, ".csv", sep=""))
 
 #### Differential expressed gene (DEG) threshold ####
-FC = 2 # log2 fold change
-adjp = 0.01 # adjusted p-values
+FC = 1 # log2 fold change
+adjp = 0.05 # adjusted p-values
 
 # Determine significant DEGs based on fold-change and adjusted p-value cut-off
-sigGenes <- rownames(subset(resLFC, (abs(log2FoldChange)>=FC & padj<=adjp )))
+sigGenes <- rownames(subset(res.DE, (abs(log2FoldChange)>=FC & padj<=adjp )))
 
 # Extract RNAseq data for the significant genes
-sig.res.DE = subset(resLFC, rownames(resLFC) %in% sigGenes)
+sig.res.DE = subset(res.DE, rownames(res.DE) %in% sigGenes)
 
 
 #### Variance Stablizing Transformation (VST) ####
@@ -88,7 +96,7 @@ sig.vst_mat = subset(vst_mat, rownames(vst_mat) %in% sigGenes)
 
 
 #### Volcano plot ####
-vol = resLFC %>% filter(!is.na(padj)) # Exclude genes with NA padj
+vol = res.DE %>% filter(!is.na(padj)) # Exclude genes with NA padj
 # Determine which genes are upregulated, downregulated, or not significant (NS) based on the DEG cutoff
 vol$group = with(vol, ifelse(padj < adjp & log2FoldChange > FC, "Upregulated",
                              ifelse(padj < adjp & log2FoldChange < -FC, "Downregulated", "NS")))
