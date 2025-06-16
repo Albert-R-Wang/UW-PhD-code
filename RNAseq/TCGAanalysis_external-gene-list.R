@@ -27,14 +27,15 @@ library(gtsummary)
 library(rstatix)
 
 
-# TCGAbiolinks package
+## TCGAbiolinks package and references
 # http://bioconductor.org/packages/release/bioc/html/TCGAbiolinks.html
 # https://github.com/BioinformaticsFMRP/TCGAbiolinks
+# https://doi.org/10.1093/nar/gkv1507
 
 # For manually checking clinical data
 # https://www.cbioportal.org/study/clinicalData?id=luad_tcga_pan_can_atlas_2018
 
-### ==============================================================================
+### ============================================================================
 ### TCGA LUAD Analysis Pipeline (using external gene list)
 
 # Sections:
