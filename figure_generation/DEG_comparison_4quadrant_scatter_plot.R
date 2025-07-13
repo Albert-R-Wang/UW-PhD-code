@@ -28,7 +28,7 @@ library(dplyr)
 # http://www.sthda.com/english/articles/24-ggpubr-publication-ready-plots/81-ggplot2-easy-way-to-mix-multiple-graphs-on-the-same-page/
 
 ### ============================================================================
-### 4-way Scatter Plot
+### 4-Quadrant Scatter Plot
 
 # Sections:
 # 1. Load Expression Data and Define Parameters
