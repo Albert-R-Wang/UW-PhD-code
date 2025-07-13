@@ -1,15 +1,15 @@
 # ------------------------------------------------------------------------------
-# Title:       4-Quadrant Plot for Visualizing DEGs Between Two Conditions
+# Title:       4-Quadrant Plot for Visualizing gene expressions Between Two DE results
 # Author:      Albert Wang
 # Last updated:        2025-07-12
 # ------------------------------------------------------------------------------
 
 
 ### Summary
-# This script generates a 4-quadrant scatter plot to compare differentially expressed genes (DEGs) across two experimental conditions based on log2 fold change and adjusted p-values.
+# This script generates a 4-quadrant scatter plot to compare gene expressions from two differential expression (DE) analyses (two comparisons) based on log2 fold change and adjusted p-values.
 # It loads two expression datasets, applies user-defined significance thresholds, and categorizes genes into one of seven expression patterns: Both Upregulated, Both Downregulated, Opposite Fold Change, Upregulated in comp1 only, Downregulated in comp1 only, Upregulated in comp2 only, and Downregulated in comp2 only.
-# Users can choose to work with DEGs from each dataset, their union, or a custom gene list. The script also supports optional subsetting by category, and it assigns labels and colors for clear visualization.
-# Final outputs include a composite 4-quadrant scatter plot with density maps or volcano plots for each condition, and an Excel file containing the categorized DEG table.
+# Users can choose to work with differentially expressed genes (DEGs) from each dataset, their union, or a custom gene list. The script also supports optional subsetting by category, and it assigns labels and colors for clear visualization.
+# Final outputs include a composite 4-quadrant scatter plot with density maps or volcano plots for each comparison, and an Excel file containing the categorized DEG table.
 
 
 ###=============================================================================
