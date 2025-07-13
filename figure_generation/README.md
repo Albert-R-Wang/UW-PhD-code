@@ -5,6 +5,8 @@ This directory contains R scripts used to generate various types of visualizatio
 ## Contents
 
 - `VennDiagram.R`: Generates Venn diagrams for comparing differentially expressed genes (DEGs) or enriched gene ontology (GO) terms across multiple conditions.
+- `DEG_comparison_4quadrant_scatter_plot.R`: Generates a 4-quadrant scatter plot to compare gene expression across two differential expression analyses.
+- `BubblePlot_enrichment.R`: Generates a bubble plot to visualize enrichment results, with bubble size representing % DEGs and color indicating adjusted p-values.
 - More will be added overtime
 
 
