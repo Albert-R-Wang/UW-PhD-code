@@ -1,10 +1,10 @@
-# UW-PhD-code
+# Code Portfolio
 
-This repository contains a curated collection of code developed during my PhD studies at the University of Wisconsin–Madison.
+This repository is a curated collection of code and projects I developed during and after my PhD at the University of Wisconsin–Madison.
 
-The code spans multiple projects, analyses, and exploratory work conducted throughout my doctoral research, primarily in the area of cancer research. It is shared here as a portfolio of my coding experience. 
+It includes learning exercises, side projects, and research scripts spanning multiple projects. This repository serves as a portfolio of my coding experience and ongoing exploration of data science and analytical methods in cancer research. It is actively maintained and regularly updated to reflect ongoing work.
 
-**Some scripts are still being finalized and will be added over time.**
+**Note: Some scripts developed during my PhD are still being finalized and will be added over time.**
 
 ## Contents
 
@@ -17,5 +17,5 @@ The repository includes scripts, notebooks, and supporting materials used for:
 - Side projects and exploratory code
 
 ## Notes
-- Code is provided as-is to showcase methods and workflows used during my PhD.
-- Certain project-specific data and proprietary materials are not included due to privacy or publication restrictions.
+- The code is provided as-is to showcase my programming experience.
+- Certain project-specific data and proprietary materials have been excluded due to privacy and data-sharing restrictions.
