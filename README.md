@@ -2,7 +2,8 @@
 
 This repository contains a curated collection of code developed during my PhD studies at the University of Wisconsin–Madison.
 
-The code spans multiple projects, analyses, and exploratory work conducted throughout my doctoral research, primarily in the area of cancer research. It is shared here as a portfolio of my coding experience. **Some scripts are still being finalized and will be added over time.**
+The code spans multiple projects, analyses, and exploratory work conducted throughout my doctoral research, primarily in the area of cancer research. It is shared here as a portfolio of my coding experience. 
+**Some scripts are still being finalized and will be added over time.**
 
 ## Contents
 
