@@ -173,8 +173,14 @@ end
 % Convert to table with descriptive column names
 T = array2table(perCell, ...
     'VariableNames',{'Index','Area','MeanInt','MedianInt','ModeInt','StdInt','FociCount'});
-% Construct output filename based on first input image
-outExcel = fullfile(pathname, [files{1}(1:end-4) '_perCellResults.xlsx']);
+
+% Remove channel suffix (e.g., _ch00, _ch01, etc.) from the base file name
+[~, baseName, ~] = fileparts(files{1});
+baseNameClean = regexprep(baseName, '_ch\d+$', '');
+
+% Construct output filename based on cleaned image name
+outExcel = fullfile(pathname, [baseNameClean '_perCellResults.xlsx']);
+
 % Write table to Excel file
 writetable(T, outExcel);
 disp(['Per-cell results written to: ' outExcel]);
@@ -210,6 +216,6 @@ subplot(6,6,[22,23,24,28,29,30,34,35,36]), imshow(foci),         title('Original
 set(findall(gcf,'-property','FontSize'),'FontSize',8);
 
 % Save the composite figure as a high-resolution JPEG
-outJpeg = fullfile(pathname, [files{1}(1:end-4) '_segmentation.jpg']);
+outJpeg = fullfile(pathname, [baseNameClean '_segmentation.jpg']);
 print(gcf, outJpeg, '-djpeg','-r600');
 disp(['Segmentation JPEG saved to: ' outJpeg]);
