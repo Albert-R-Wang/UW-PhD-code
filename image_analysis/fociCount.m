@@ -1,10 +1,17 @@
 % ------------------------------------------------------------------------------
-% Title:         Nucleus Foci Counting Pipeline
+% Title:         Nuclear Foci Quantification Pipeline
 % Author:        Albert Wang
 % Last updated:  2025-07-17
 % ------------------------------------------------------------------------------
 
 %% Summary
+% γH2AX is the phosphorylated form of the histone variant H2AX, rapidly formed 
+% at sites of DNA double-strand breaks as an early cellular response to genotoxic stress. 
+% Quantifying γH2AX foci provides a sensitive and reliable indicator of DNA 
+% double-strand breaks, allowing researchers to assess both the extent of 
+% DNA damage and the cellular response to genotoxic stress, such as 
+% radiation therapy.
+% 
 % This script reads nucleus and foci TIFF images from user selection,
 % converts each to a summed-intensity grayscale map,
 % applies either dynamic or universal thresholding,
@@ -12,11 +19,6 @@
 % computes per-nucleus intensity statistics and foci counts,
 % writes results to an Excel file,
 % and saves an annotated segmentation JPEG with colored nucleus indices.
-% 
-% Quantifying γH2AX foci offers a sensitive and reliable measure of DNA
-% double-strand breaks, enabling researchers to evaluate both the extent
-% of DNA damage and the cellular response to genotoxic stress, such as
-% radiation therapy.
 
 
 %% Script Outline
