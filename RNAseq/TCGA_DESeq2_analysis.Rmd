@@ -1,0 +1,606 @@
+---
+title: "TCGA RNA-seq Analysis using DESeq2"
+author: "Albert Wang"
+output: html_notebook
+---
+
+
+## Introduction
+
+**Lung adenocarcinoma (LUAD)** is the most common subtype of non-small cell lung cancer and a major contributor to cancer-related mortality in the United States (Siegel et al., 2024; Herbst et al., 2018). Understanding changes in gene expression during tumor development and progression is essential for identifying potential biomarkers and therapeutic targets. **RNA sequencing (RNA-seq)** is a widely used technique for measuring gene expression by quantifying the RNA produced from active genes, helping researchers determine which genes are turned on or off under different biological conditions. In this analysis, I used RNA-seq data from **The Cancer Genome Atlas (TCGA)** to investigate transcriptomic differences between tumor and normal tissues, as well as between early-stage and late-stage LUAD. TCGA is a comprehensive, large-scale public database initiated by the National Cancer Institute (NCI) and the National Human Genome Research Institute (NHGRI) to systematically document tumor molecular profiles (Chang et al., 2013). By integrating genomic, epigenomic, transcriptomic, and clinical data across more than 30 cancer types, TCGA has become an invaluable platform for studying cancer biology and discovering clinically relevant molecular features. Identifying transcriptomic changes in LUAD may improve our understanding of tumor progression and support the development of stage-specific diagnostic and therapeutic strategies. This notebook outlines the full analysis pipeline—from data acquisition and filtering to differential expression analysis, visualization, and functional enrichment using Gene Ontology (GO) analysis.
+
+
+## Approach
+
+In this analysis, I leveraged RNA-seq data from TCGA's LUAD cohort (Collisson et al., 2014) to explore gene expression differences between tumor and normal tissues, as well as between early-stage and late-stage tumors. After downloading and preparing the dataset, I performed quality control and filtering to remove low-quality and duplicate samples. Differential gene expression analysis was carried out using DESeq2 (Love et al., 2014), a statistical method designed to identify genes that show significant changes in expression between conditions. This was followed by log2 fold change shrinkage to reduce noise in low-count genes and provide more stable estimates. Variance stabilizing transformation (VST) was then applied to the count data, which normalizes for sequencing depth and reduces variance across genes, making the data suitable for exploratory analyses. This transformation prepared the result for downstream visualizations, including PCA plots (to assess sample clustering), volcano plots (to highlight significant gene expression changes), and heatmaps (to visualize expression patterns across samples). Lastly, Gene Ontology (GO) enrichment analysis was conducted to identify biological processes that are statistically overrepresented among the differential expressed genes, providing functional insights into the observed expression changes.
+
+
+
+
+## Key Findings
+
+- Lung adenocarcinoma and normal lung tissue exhibit distinct gene expression profiles. 
+- Genes associated with key cancer hallmarks (Hanahan, 2022), including cell proliferation, extracellular matrix remodeling, and immune evasion, are significantly altered in tumor samples compared to normal tissue.
+- In addition to these classical hallmarks, late-stage tumors also show differential expression of genes that may help metastatic cancer cells adapt to and colonize secondary sites.
+
+
+
+```{r setup, include=F}
+# Load required packages
+library(TCGAbiolinks)
+library(dplyr)
+library(SummarizedExperiment)
+library(pheatmap)
+library(RColorBrewer)
+library(grid)
+library(DESeq2)
+library(apeglm)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(enrichplot)
+library(ggplot2)
+```
+
+## Transcriptomic Profiling of Tumor and Normal Samples
+### Download TCGA-LUAD RNA-seq dataset
+The Cancer Genome Atlas (TCGA) Lung Adenocarcinoma (LUAD) RNA-seq data was accessed and downloaded using the [TCGAbiolinks](http://bioconductor.org/packages/TCGAbiolinks) package (Colaprico et al., 2016). The analysis utilized the "STAR - Counts" workflow, which provides gene level expression (raw counts) data generated using the STAR aligner (Dobin et al., 2012). The data was retrieved directly from the Genomic Data Commons (GDC) and includes both gene expression counts and associated clinical metadata.
+```{r download-data, message=FALSE, results=FALSE}
+
+## Download and clean TCGA data (Lung Adenocarcinoma) ==========================================
+
+# Query and download TCGA-LUAD RNA-seq gene expression data using STAR - Counts workflow
+query.luad <- GDCquery(project = "TCGA-LUAD",
+                       data.category = "Transcriptome Profiling",
+                       data.type = "Gene Expression Quantification",
+                       experimental.strategy = "RNA-Seq",
+                       workflow.type = "STAR - Counts")
+
+GDCdownload(query.luad)
+data.luad <- GDCprepare(query.luad)
+
+```
+
+### Data Cleaning and Sample Filtering
+To ensure data quality and consistency, I performed filtering to remove samples derived from formalin-fixed paraffin-embedded (FFPE) tissues, which can introduce RNA degradation artifacts. Additionally, for patients with multiple technical replicates, I retained only a single representative sample based on Broad Institute Genome Data Analysis Center (GDAC) [barcode—prioritizing analyte type](https://broadinstitute.atlassian.net/wiki/spaces/GDAC/pages/844334036/FAQ) (H > R > T), followed by portion and plate numbers when necessary. This filtering logic was implemented using a custom-written R function to identify and retain the most appropriate replicate per patient. This step minimizes redundancy and ensures that each patient is represented only once in downstream analyses.
+
+```{r replicate-filter-function, echo=FALSE}
+## Function to filter TCGA replicates
+# Based on Broad Institute Genome Data Analysis Center (GDAC), when multiple barcodes exist for a given sample, the following rules are apply:
+# 1) Prefer H analytes over R, and R analytes over T for RNA (H > R > T). In the case of LUAD, all samples are R
+# 2) Otherwise prefer the barcode with the highest lexicographical sort value, to ensure that higher portion and/or plate numbers are selected when all other barcode fields are identical
+
+# input the list of barcodes that should be filtered, return the filtered barcodes (one barcode for each patient, no replicates)
+tcga_replicateFilter = function(tsb, analyte_position=20, plate=c(22,25), portion=c(18,19), decreasing = TRUE){ 
+  sampleID = substr(tsb, start = 1, stop = 15) # sample ID (identified at position 1 to 15 in barcode)
+  dp_samples = unique(sampleID[duplicated(sampleID)]) # find replicate samples
+  
+  if(length(dp_samples)==0){
+    message("No duplicated barcodes, return original input.")
+    tsb
+  }else{
+    uniq_tsb = tsb[! sampleID %in% dp_samples] # unique barcodes
+    dp_tsb = setdiff(tsb, uniq_tsb) # duplicate barcodes list
+    
+    add_tsb = c() # after filtering the replicates, to add to this temp list to combine with the unique barcodes (uniq_tsb) later
+    
+    
+    for(x in dp_samples){
+      mulaliquots = dp_tsb[substr(dp_tsb, 1, 15) == x] # for each loop, get all barcodes that associate with each patient
+      analytes = substr(mulaliquots, 
+                        start = analyte_position, # at position 20 in barcode
+                        stop = analyte_position) # obtain all analytes for each patient
+      # First filter, prefer H analytes over R, and R over T. If all sample have the same analyte, move to the next filter
+      if(any(analytes == "H") & !(all(analytes == "H"))){ # if there's any analyte that is H, and not all analytes are H
+        aliquot = mulaliquots[which(analytes == "H")] # find which analytes is H
+        add_tsb = c(add_tsb, aliquot) # add to the temp list
+        dp_tsb = setdiff(dp_tsb, mulaliquots) # remove mulaliquots from the duplicate list
+      }else if(any(analytes == "R") & !(all(analytes == "R"))){
+        aliquot = mulaliquots[which(analytes == "R")]
+        add_tsb = c(add_tsb, aliquot)
+        dp_tsb = setdiff(dp_tsb, mulaliquots)
+      }else if(any(analytes == "T") & !(all(analytes == "T"))){
+        aliquot = mulaliquots[which(analytes == "T")]
+        add_tsb = c(add_tsb, aliquot)
+        dp_tsb = setdiff(dp_tsb, mulaliquots)
+      }
+    }
+  }
+  
+  
+  if(length(dp_tsb) == 0){
+    message("Filter barcodes successfully based on analyte")
+    c(uniq_tsb, add_tsb)
+  } else{ # Second filter, either with portion or plate number
+    # filter according to portion number (at position 18 to 19 in barcode)
+    sampleID_res = substr(dp_tsb, start=1, stop=15) #remaining sample ID
+    dp_samples_res = unique(sampleID_res[duplicated(sampleID_res)])
+    
+    for(x in dp_samples_res){
+      mulaliquots = dp_tsb[substr(dp_tsb,1,15) == x]
+      portion_codes = substr(mulaliquots,
+                             start = portion[1],
+                             stop = portion[2]) # obtain all portion codes for each patient
+      portion_keep = sort(portion_codes, decreasing = decreasing)[1] # sort the portion code in decreasing order (larger value first), and get the largest value (first value)
+      if(!all(portion_codes == portion_keep)){ # if not all portion codes are the same
+        if(length(which(portion_codes == portion_keep)) == 1){ # if the largest portion code is unique to one sample, then keep that sample barcode, remove all the other replicates
+          add_tsb = c(add_tsb, mulaliquots[which(portion_codes == portion_keep)])
+          dp_tsb = setdiff(dp_tsb, mulaliquots)
+        }else{
+          dp_tsb = setdiff(dp_tsb, mulaliquots[which(portion_codes != portion_keep)]) # if the largest portion code is not unique to one sample, then only remove those replicates that have smaller portion codes
+        }
+        
+      }
+    }
+    
+    if(length(dp_tsb)==0){
+      message("Filter barcodes successfully based on portion number")
+      c(uniq_tsb, add_tsb)
+    }else{
+      # filter according to plate number (at position between 22 to 25 in barcode)
+      sampleID_res = substr(dp_tsb, start=1, stop=15)
+      dp_samples_res = unique(sampleID_res[duplicated(sampleID_res)])
+      for(x in dp_samples_res){
+        mulaliquots = dp_tsb[substr(dp_tsb,1,15) == x]
+        plate_codes = substr(mulaliquots,
+                             start = plate[1],
+                             stop = plate[2]) #obtain all plate numbers for each patient
+        plate_keep = sort(plate_codes, decreasing = decreasing)[1] # sort the plate number in decreasing order, and get the first value
+        add_tsb = c(add_tsb, mulaliquots[which(plate_codes == plate_keep)]) # add that barcode to the temp list
+        dp_tsb = setdiff(dp_tsb, mulaliquots) # remove all barcodes from this patient from the duplicate list
+      }
+      
+      if(length(dp_tsb)==0){
+        message("Filter barcodes successfully based on plate number")
+        c(uniq_tsb, add_tsb)
+      }else{
+        message("Barcodes ", dp_tsb, " failed in filter process, other barcodes will be returned.")
+        c(uniq_tsb, add_tsb)
+      }
+    }
+  }
+}
+```
+
+
+
+```{r filter-ffpe-replicates}
+# Number of samples prior to filtering
+length(data.luad$barcode)
+
+### filtering of FFPE (due to potential RNA degradation in old FFPE samples) and replicates
+
+data.luad = data.luad[, !data.luad$is_ffpe] #remove FFPE samples
+
+barcode.all = data.luad$barcode # all barcode ID
+
+# Use the tcga_replicateFilter function defined earlier to get the one barcode for each patient (no replicate)
+barcode.filt = tcga_replicateFilter(barcode.all)
+data.luad = data.luad[, data.luad$barcode %in% barcode.filt] # obtain filtered data
+
+# Number of samples after filtering out low-quality or duplicate entries
+length(data.luad$barcode)
+```
+Samples were further filtered to exclude those lacking appropriate clinical information.
+```{r clinical-info}
+# Construct clinical data table and filter out tumor/normal samples without clinical info
+
+# Extract clinical info
+clinical.info = data.frame(
+  ID = data.luad$barcode,
+  vital_status = data.luad$vital_status, #indicate whether the patients were dead or alive at the end of study
+  days_to_death = data.luad$days_to_death, #only for patients that were dead
+  days_to_last_follow_up = data.luad$days_to_last_follow_up, #only for patients that were alive at the end of study
+  patientID = data.luad$patient,
+  FFPE = data.luad$is_ffpe,
+  stage = data.luad$ajcc_pathologic_stage,
+  tissue_type = data.luad$tissue_type,
+  tumorType = data.luad$definition # ex. Primary solid Tumor, Recurrent Solid Tumor, etc.
+)
+
+# Create a unified "days" column by prioritizing "days_to_death" and using "days_to_last_follow_up" if "days_to_death" is missing
+clinical.info = clinical.info %>% mutate(days = coalesce(days_to_death, days_to_last_follow_up))
+# Merge sub-stages (e.g., IA, IB, IIA, IIB, IIIA, IIIB) into their corresponding main stages (I, II, III, IV)
+clinical.info = clinical.info %>% 
+  mutate(overall.Stage = case_when(stage == "Stage I" ~ "Stage I",
+                                   stage == "Stage IA" ~ "Stage I",
+                                   stage == "Stage IB" ~ "Stage I",
+                                   stage == "Stage II" ~ "Stage II",
+                                   stage == "Stage IIA" ~ "Stage II",
+                                   stage == "Stage IIB" ~ "Stage II",
+                                   stage == "Stage IIIA" ~ "Stage III",
+                                   stage == "Stage IIIB" ~ "Stage III",
+                                   stage == "Stage IV" ~ "Stage IV"))
+
+clinical.info.subset = clinical.info %>%
+  #filter(overall.Stage != "Stage IV") %>%     # (optional) remove certain stages
+  #filter(tissue_type == "Tumor") %>%          # (optional) remove Normal or Tumor samples
+  filter(!is.na(days)) %>%                     # (optional) remove samples without survival data
+  #filter(days != 0) %>%                       # (optional) remove samples with survival day = 0
+  filter(!is.na(overall.Stage)) %>%            # remove samples without tumor stage
+  filter(tumorType != "Recurrent Solid Tumor") # remove recurrent tumor
+
+data.luad = data.luad[, data.luad$barcode %in% clinical.info.subset$ID]
+
+
+# Number of total samples after filtering based on clinical info
+length(data.luad$barcode)
+
+# Number of tumor samples
+length(data.luad[, data.luad$tissue_type == "Tumor"]$barcode)
+# Number of normal samples
+length(data.luad[, data.luad$tissue_type == "Normal"]$barcode)
+```
+
+### DESeq2 Analysis: Tumor vs. Normal tissue
+To identify differential expressed genes between tumor and normal tissues, I used the [DESeq2](http://bioconductor.org/packages/DESeq2) package. DESeq2 is a widely used R package designed for analyzing count-based RNA sequencing data (Love et al., 2014). It models gene expression counts using a negative binomial distribution, allowing for accurate identification of differentially expressed genes between conditions. The method accounts for variation in sequencing depth and biological variability by estimating size factors and dispersion parameters.
+
+To begin, I obtained the TCGA raw count data, mapped Ensembl IDs to gene symbols, and ensured that all samples in the count matrix were present in the clinical metadata with matching sample order.
+
+```{r Deseq2-prep}
+
+
+### Use Unstranded data as input (count data) for DESeq2 ###
+dataPrep.luad <- TCGAanalyze_Preprocessing(object = data.luad,cor.cut = 0.6, datatype = "unstranded") # filter samples based on spearman correlation (low correlation as possible outlier)
+
+
+# Get the official gene name
+extName = data.frame(Symbol = rowData(data.luad)$gene_name,
+                     Ensembl = rownames(data.luad))
+extName = extName[match(rownames(dataPrep.luad), extName$Ensembl),] #Reorder extName to match rownames of dataPrep.luad
+if (anyNA(extName)){ # If some Ensembl IDs don't have matching symbols, this will result in NAs in that row
+  warning("Some Ensembl IDs don't have matching symbols")
+  extName = extName[!is.na(extName$Symbol),] # remove those rows
+}
+rownames(dataPrep.luad) = extName$Symbol # change Ensembl ID to gene name
+dataPrep.luad = as.data.frame(dataPrep.luad)
+
+# DESeq2 input data format (count data)
+dataPrep.luad[1:7, 1:10]
+
+rownames(clinical.info.subset) = clinical.info.subset$ID
+
+# Verify that all samples in the clinical information are present in the count data and that naming is consistent
+all(rownames(clinical.info.subset) %in% colnames(dataPrep.luad))
+
+# Reorder the count matrix to match the sample order in the clinical information
+dataPrep.luad <- dataPrep.luad[, rownames(clinical.info.subset)]
+# Confirm that the sample order is identical; this is critical to prevent misalignment between counts and sample information in DESeq2
+all(rownames(clinical.info.subset) == colnames(dataPrep.luad))
+```
+
+General steps of DESeq2 analysis:
+
+- Prior to analysis, a filtering step was applied to remove genes with low total counts (fewer than 10 reads across all samples), which improves both computational efficiency and the reliability of results. I also set the tissue type to "Normal" as the reference level, allowing the model to compute log fold changes for tumor samples relative to normal tissue. 
+- To address the problem that lowly expressed genes tend to have high variability, shrinkage of log2FC was performed using the [apeglm](http://bioconductor.org/packages/apeglm) package (Zhu et al., 2018).
+- To prepare the data for downstream visualization and clustering, variance stabilizing transformation (VST) was applied to the normalized count matrix. VST adjusts for differences in sequencing depth and stabilizes the variance across genes, especially those with low counts. This transformation makes the data more suitable for methods like principal component analysis (PCA) and heatmaps by reducing the influence of highly variable genes and making expression values more comparable across samples.
+```{r DESeq-analysis, warning=FALSE}
+### Set up DESeq data set ###
+dds <- DESeqDataSetFromMatrix(countData = dataPrep.luad,
+                              colData = clinical.info.subset,
+                              design = ~ tissue_type) # Compare tissue_type (Tumor vs. Normal)
+dds
+
+
+### Pre-filtering ###
+# it's not necessary to pre-filter low count genes. Two useful reasons: 1) reduce memory size of the dds data object, thus increase speed within DESeq2, and 2) improve visualizations as low counts gene are not plotted
+# filter by sum of counts
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+
+
+### factor levels ###
+#specify reference level (ex. "untreated")
+dds$tissue_type <- relevel(dds$tissue_type, ref = "Normal")
+
+### Differential expression analysis ###
+#Starting in version 1.16, betaPrior is F by default, this means that DESeq2 will not perform any shrinkage of log2FC. This is moved to the lfcShrink function so that newer shrinkage methods can be more easily apply as needed. Turn betaPrior on if want to match the result of earlier versions of DESEq2.
+#The purpose of shrinkage of log2FC is to address the problem that lowly expressed genes tend to have high variability
+#It looks at the largest fold changes that are not due to low counts and uses these to inform a prior distribution. So the large fold changes from genes with lots of statistical information are not shrunk, while the imprecise fold changes are shrunk. This allows you to compare all estimated LFC across experiments, for example, which is not really feasible without the use of a prior. 
+
+dds <- DESeq(dds, betaPrior = F, quiet = T)
+res <- results(dds)
+res
+
+## LFC (log fold change) shrinkage
+#Unlike betaprior, all estimators in lfcShrink does not change padj. BetaPrior will give the p-value for the shrunken LFC, while lfcShrink is only giving the shruken LFC, and keeping the original p-value
+resLFC = lfcShrink(dds, coef = 2, type="apeglm", res = res, quiet = T) #The newer shrinkage methods/estimators (apeglm and ashr) outperform the Normal prior (or betaprior) in most cases. The default is "apeglm"
+
+resLFC
+
+
+## Export full DESeq2 result
+res.DE = as.data.frame(resLFC)
+rownames(res.DE) <- gsub("\\.", "-", rownames(res.DE)) #DESeq2 sets the gene name with "." instead of "-" (ex. HLA.E instead of HLA-E). Here change gene names with "." to "-" (i.e. HLA.E becomes HLA-E)
+
+DEgroups_export = resultsNames(dds)[2]
+write.csv(as.data.frame(res.DE), 
+          file=paste("TCGA-LUAD_DESeq2result_", DEgroups_export,".csv", sep = ""))
+
+
+```
+```{r DEG-analysis-2}
+### Differential expressed gene (DEG) threshold ###
+FC = 2 # log2 fold change
+adjp = 0.01 # adjusted p-values
+
+# Determine significant DEGs based on fold-change and adjusted p-value cut-off
+sigGenes <- rownames(subset(res.DE, (abs(log2FoldChange)>=FC & padj<=adjp )))
+
+# Extract RNAseq data for the significant genes
+sig.res.DE = subset(res.DE, rownames(res.DE) %in% sigGenes)
+
+
+### Variance Stablizing Transformation (VST) ###
+# Adjusts for sequencing depth and stabilizes variance across the range of mean values.
+# This transformation is important for visualization and clustering, as it reduces the influence of highly variable genes and makes expression values more comparable across samples.
+vsd = vst(dds, blind = F) #transform counts into log2 scale (modeled to stabilize variance) for visualization
+
+# Extract the matrix of VST-transformed values
+vst_mat = assay(vsd)
+sig.vst_mat = subset(vst_mat, rownames(vst_mat) %in% sigGenes)
+```
+
+
+### Visualization (Tumor vs. Normal tissue)
+To explore overall patterns of gene expression, a Principal Component Analysis (PCA) plot was generated using the VST-transformed data. The PCA plot provides a visual summary of variation across samples based on the gene expression profiles (most variable genes). By reducing high-dimensional RNA-seq data into principal components, the PCA plot highlights sample clustering and separation between groups (ex. tumor and normal tissues).
+
+```{r PCA}
+### Visualization ###
+
+### PCA plot ###
+plotPCA(vsd, intgroup = "tissue_type", ntop = 500) #ntop specify the number of top genes to sue for PCA, selected by highest row variance
+
+```
+Additionally, a volcano plot was created to highlight genes that are significantly differentially expressed, with the x-axis representing log2 fold change and the y-axis showing the -log10 of the adjusted p-value. This provides a visual summary of statistically significant genes, with those showing large fold changes and low p-values appearing in the corners of the plot. Red indicates significantly upregulated genes and blue indicates downregulated ones, with the number of genes in each category also displayed.
+```{r volcano}
+### Volcano plot ###
+vol = res.DE %>% filter(!is.na(padj)) # Exclude genes with NA padj
+# Determine which genes are upregulated, downregulated, or not significant (NS) based on the DEG cutoff
+vol$group = with(vol, ifelse(padj < adjp & log2FoldChange > FC, "Upregulated",
+                             ifelse(padj < adjp & log2FoldChange < -FC, "Downregulated", "NS")))
+numDEG = table(vol$group) # Count the number of genes that are upregulated, downregulated, or NS
+
+ggplot(vol, aes(x=log2FoldChange, y=-log10(padj), color = group)) + geom_point(size = 2, alpha = 0.75) +
+  scale_color_manual(values = c("Upregulated" = "red3", "Downregulated" = "royalblue3", "NS" = "gray20")) +
+  annotate("text", x = max(vol$log2FoldChange), y = max(-log10(vol$padj), na.rm = TRUE), 
+           label = paste("Upregulated:", numDEG["Upregulated"]), color = "red3", hjust = 1) +
+  annotate("text", x = min(vol$log2FoldChange), y = max(-log10(vol$padj), na.rm = TRUE), 
+           label = paste("Downregulated:", numDEG["Downregulated"]), color = "royalblue3", hjust = 0) +
+  theme_minimal()
+```
+
+To further examine patterns of gene expression across samples, a heatmap of the differential expressed genes was generated. The VST-transformed data were scaled by row to highlight relative expression changes. Clustering was applied to both genes and samples to identify potential subgroups, and clinical annotations such as tumor stage and tissue type were overlaid to aid biological interpretation. The resulting heatmap showed clear separation between tumor and normal samples, indicating distinct gene expression profiles between the two groups.
+
+```{r heatmap-tumor-normal}
+### Heatmap annotation ###
+# Define annotation data
+AnnData <- data.frame(overall.Stage = clinical.info.subset$overall.Stage,
+                      tissue = clinical.info.subset$tissue_type)
+rownames(AnnData) <- clinical.info.subset$ID
+
+# Define annotation color
+Ann_color = list("overall.Stage" = c("Stage I" = "grey97", "Stage II" = "#9bf09d",
+                                     "Stage III" = "#19a337", "Stage IV" = "#337a2c"), 
+                 "tissue" = c("Tumor" = "#F8766D","Normal" = "#00BFC4"))
+
+
+
+# Define cluster distance
+clusterDist = "euclidean" #options: "euclidean", "correlation", and more
+breaksList = seq(-2, 2, by = 0.1)
+
+TCGAheatmap_TvN = pheatmap(sig.vst_mat, scale="row", cluster_row=T, cluster_col=T,
+                           clustering_distance_rows=clusterDist, clustering_distance_cols=clusterDist,
+                           clustering_method="ward.D2",
+                           color=colorRampPalette(rev(brewer.pal(n = 11, name ="RdBu")))(length(breaksList)),
+                           border_color="grey10", show_rownames = F, show_colnames = F, fontsize = 11,
+                           annotation_col = AnnData, breaks = breaksList, 
+                           treeheight_row = 70,annotation_colors = Ann_color)
+
+TCGAheatmap_TvN
+```
+
+### Gene Ontology analysis (Tumor vs. Normal tissue)
+To gain insight into the biological functions associated with the differential expressed genes, I performed Gene Ontology (GO) enrichment analysis using the [clusterProfiler](https://bioconductor.org/packages/clusterProfiler) package (Yu et al, 2012; Xu et al., 2024). This analysis focused on the Biological Process (BP) ontology to identify pathways and processes that are significantly overrepresented among the significant genes. 
+
+To visualize the results, I used multiple plot types:
+
+- The dot plot provides an overview of enriched terms along with their gene ratios and adjusted p-values.
+  - Many genes involved in cell division are highly dysregulated in tumor tissue compared to normal tissue, suggesting disrupted control of the cell cycle and contributing to unchecked tumor growth.
+- The tree plot displays hierarchical relationships between GO terms to highlight functional clusters.
+  - The tree plot highlights multiple functional clusters, including regulation of mitotic division, and other processes involved in cell division. It also reveals additional key pathways related to immune response and extracellular matrix organization, both of which play important roles in cancer progression.
+- The cnetplot (category network plot) shows how individual genes are connected to multiple enriched terms, offering insights into shared functional roles.
+
+These visualizations collectively help contextualize the transcriptional changes observed across conditions.
+```{r GO-analysis, fig.width=10}
+### GO analysis ###
+
+go_enrich = enrichGO(
+  gene = sigGenes,
+  OrgDb = org.Hs.eg.db,
+  keyType = "SYMBOL",
+  ont = "BP",
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.05)
+
+go_results = as.data.frame(go_enrich)
+head(go_results)
+# Dot plot
+dotplot(go_enrich, showCategory = 10)
+# Enrichment Map
+enrich_result = pairwise_termsim(go_enrich)
+treeplot(enrich_result, showCategory = 15, label_format = 20)
+# Network plot
+cnetplot(go_enrich, foldChange = NULL, showCategory = 3, node_label = "all")
+
+```
+
+
+## Gene Expression Analysis by Tumor Stage
+To investigate how gene expression varies across tumor progression, I performed differential expression analysis comparing late-stage (Stage IV) and early-stage (Stage II) lung adenocarcinoma tumors. By categorizing samples based on clinical staging information, I used DESeq2 to identify genes that are significantly up- or downregulated in late-stage tumors relative to early-stage cases. This analysis provides insight into molecular changes associated with tumor advancement and may highlight genes relevant to metastasis or aggressive disease behavior.
+
+The samples were filtered to retain only the relevant expression data required for downstream analysis:
+```{r Setup-tumor-data}
+# Only keep tumor samples
+clinical.info.tumor = clinical.info.subset %>%
+  filter(tissue_type == "Tumor") %>%
+  filter(overall.Stage != "Stage I") %>%
+  filter(overall.Stage != "Stage III")
+
+# Classify tumor samples into early-stage or late-stage based on overall stage
+clinical.info.tumor = clinical.info.tumor %>% 
+  mutate(tumorCategory = case_when(overall.Stage == "Stage II" ~ "Early_Stage",
+                                   overall.Stage == "Stage IV" ~ "Late_Stage"))
+
+dataPrep.luad.tumor = dataPrep.luad[, colnames(dataPrep.luad) %in% clinical.info.tumor$ID]
+
+# Verify that all samples in the clinical information are present in the count data and that naming is consistent
+all(rownames(clinical.info.tumor) %in% colnames(dataPrep.luad.tumor))
+
+# Reorder the count matrix to match the sample order in the clinical information
+dataPrep.luad.tumor <- dataPrep.luad.tumor[, rownames(clinical.info.tumor)]
+# Confirm that the sample order is identical; this is critical to prevent misalignment between counts and sample information in DESeq2
+all(rownames(clinical.info.tumor) == colnames(dataPrep.luad.tumor))
+```
+Following the same DESeq2 workflow described for the tumor vs. normal comparison:
+```{r DESeq-analysis-tumorStage, warning=FALSE}
+### Set up DESeq data set ###
+dds.tumor <- DESeqDataSetFromMatrix(countData = dataPrep.luad.tumor,
+                              colData = clinical.info.tumor,
+                              design = ~ tumorCategory)
+dds.tumor
+
+
+### Pre-filtering ###
+keep <- rowSums(counts(dds.tumor)) >= 10
+dds.tumor <- dds.tumor[keep,]
+
+
+### factor levels ###
+#specify reference level (ex. "untreated")
+dds.tumor$tumorCategory <- relevel(dds.tumor$tumorCategory, ref = "Early_Stage")
+
+### Differential expression analysis ###
+dds.tumor <- DESeq(dds.tumor, betaPrior = F, quiet = T)
+
+res.tumor <- results(dds.tumor)
+res.tumor
+
+## LFC (log fold change) shrinkage
+resLFC.tumor = lfcShrink(dds.tumor, coef = 2, type="apeglm", res = res.tumor, quiet = T)
+resLFC.tumor
+
+## Export full DESeq2 result
+res.DE.tumor = as.data.frame(resLFC.tumor)
+rownames(res.DE.tumor) <- gsub("\\.", "-", rownames(res.DE.tumor))
+
+DEgroups_export = resultsNames(dds.tumor)[2]
+write.csv(as.data.frame(res.DE.tumor), 
+          file=paste("TCGA-LUAD_DESeq2result_", DEgroups_export,".csv", sep = ""))
+```
+```{r DESeq-analysis-tumorStage-2}
+### Differential expressed gene (DEG) threshold ###
+FC = 1 # log2 fold change
+adjp = 0.05 # adjusted p-values
+
+# Determine significant DEGs based on fold-change and adjusted p-value cut-off
+sigGenes.tumor <- rownames(subset(res.DE.tumor, (abs(log2FoldChange)>=FC & padj<=adjp )))
+
+
+### Variance Stablizing Transformation (VST) ###
+vsd.tumor = vst(dds.tumor, blind = F)
+
+# Extract the matrix of VST-transformed values
+vst_mat.tumor = assay(vsd.tumor)
+sig.vst_mat.tumor = subset(vst_mat.tumor, rownames(vst_mat.tumor) %in% sigGenes.tumor)
+```
+
+### Visualization (late-stage vs. early-stage tumors)
+The PCA plot for the late-stage vs. early-stage tumor comparison does not show clear separation between the two groups, suggesting that their overall gene expression profiles are not as distinct as those observed in the tumor vs. normal comparison. This is further reflected in the volcano plot, where the number of differential expressed genes is considerably lower. One possible explanation is that late-stage and early-stage tumors share many core tumor-associated gene expression patterns, resulting in fewer transcriptomic differences between them.
+
+```{r PCA-Volcano-tumorStage}
+### Visualization ###
+
+### PCA plot ###
+plotPCA(vsd.tumor, intgroup = "tumorCategory", ntop = 500)
+
+
+### Volcano plot ###
+vol = res.DE.tumor %>% filter(!is.na(padj)) # Exclude genes with NA padj
+# Determine which genes are upregulated, downregulated, or not significant (NS) based on the DEG cutoff
+vol$group = with(vol, ifelse(padj < adjp & log2FoldChange > FC, "Upregulated",
+                             ifelse(padj < adjp & log2FoldChange < -FC, "Downregulated", "NS")))
+numDEG = table(vol$group) # Count the number of genes that are upregulated, downregulated, or NS
+
+ggplot(vol, aes(x=log2FoldChange, y=-log10(padj), color = group)) + geom_point(size = 2, alpha = 0.75) +
+  scale_color_manual(values = c("Upregulated" = "red3", "Downregulated" = "royalblue3", "NS" = "gray20")) +
+  annotate("text", x = max(vol$log2FoldChange), y = max(-log10(vol$padj), na.rm = TRUE), 
+           label = paste("Upregulated:", numDEG["Upregulated"]), color = "red3", hjust = 1) +
+  annotate("text", x = min(vol$log2FoldChange), y = max(-log10(vol$padj), na.rm = TRUE), 
+           label = paste("Downregulated:", numDEG["Downregulated"]), color = "royalblue3", hjust = 0) +
+  theme_minimal()
+```
+### Gene Ontology analysis (late-stage vs. early-stage tumors)
+Despite the overall similarity in gene expression profiles, additional changes were still observed in late-stage tumors compared to early-stage tumors. These alterations may play a critical role in the metastatic process, as late-stage (Stage IV) cancer is defined by the spread of tumor cells beyond the original site to distant organs, whereas early-stage (Stage II) remains largely confined to the primary location. Gene Ontology (GO) analysis revealed that many differentially expressed genes are traditionally associated with neurological signaling and regulatory processes. Interestingly, the central nervous system is one of the most common metastatic sites for lung adenocarcinoma (Cagney et al., 2017; Suh et al., 2020; Soffietti et al., 2020). This finding suggests that the differential expressed genes may reflect adaptations that enable tumor cells to survive and thrive within the microenvironment of the central nervous system. The cnetplot highlighted several candidate genes that may warrant further investigation. For example, NLGN1 has been implicated in promoting cancer–nerve interactions, while FZD4 and KCNB1 have been associated with epithelial-to-mesenchymal transition and glioma progression, respectively(Bizzozero et al., 2022; Sompel et al., 2021; Wang et al., 2017).
+```{r GO-analysis-tumorStage, fig.width=10}
+### GO analysis ###
+go_enrich = enrichGO(
+  gene = sigGenes.tumor,
+  OrgDb = org.Hs.eg.db,
+  keyType = "SYMBOL",
+  ont = "BP",
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.05
+)
+
+go_results = as.data.frame(go_enrich)
+head(go_results)
+# Dot plot
+dotplot(go_enrich, showCategory = 10)
+# Enrichment Map
+enrich_result = pairwise_termsim(go_enrich)
+treeplot(enrich_result, showCategory = 15, label_format = 20)
+# Network plot
+cnetplot(go_enrich, foldChange = NULL, showCategory = 10, node_label = "all")
+
+```
+
+## Conclusion
+This analysis utilized RNA sequencing data from TCGA to investigate transcriptomic changes in lung adenocarcinoma, identifying distinct gene expression patterns between tumor and normal tissues, as well as between early stage and late stage tumors. Differential gene expression and Gene Ontology enrichment analyses identified genes involved in critical cancer-related processes such as cell cycle regulation, extracellular matrix organization, and immune system modulation, highlighting the dysregulated pathways that drive tumor progression. Although early stage and late stage tumors share many expression features, late stage samples showed additional changes in genes related to neurological signaling, which may reflect adaptations for metastasis to the central nervous system. These results enhance our understanding of lung adenocarcinoma biology and may inform future efforts to develop stage-specific diagnostics and targeted therapies.
+
+
+## References
+Bizzozero, L., Pergolizzi, M., Pascal, D., Maldi, E., Villari, G., Erriquez, J., Volante, M., Serini, G., Marchiò, C., Bussolino, F., et al. (2022). Tumoral Neuroligin 1 Promotes Cancer–Nerve Interactions and Synergizes with the Glial Cell Line-Derived Neurotrophic Factor. Cells 11, 280.
+
+Cagney, D.N., Martin, A.M., Catalano, P.J., Redig, A.J., Lin, N.U., Lee, E.Q., Wen, P.Y., Dunn, I.F., Bi, W.L., Weiss, S.E., et al. (2017). Incidence and prognosis of patients with brain metastases at diagnosis of systemic malignancy: a population-based study. Neuro-Oncology 19, 1511-1521.
+
+Chang, K., Creighton, C.J., Davis, C., Donehower, L., Drummond, J., Wheeler, D., Ally, A., Balasundaram, M., Birol, I., Butterfield, Y.S.N., et al. (2013). The Cancer Genome Atlas Pan-Cancer analysis project. Nature genetics 45, 1113-1120.
+
+Colaprico, A., Silva, T.C., Olsen, C., Garofano, L., Cava, C., Garolini, D., Sabedot, T.S., Malta, T.M., Pagnotta, S.M., Castiglioni, I., et al. (2016). TCGAbiolinks: an R/Bioconductor package for integrative analysis of TCGA data. Nucleic Acids Research 44, e71-e71.
+
+Collisson, E.A., Campbell, J.D., Brooks, A.N., Berger, A.H., Lee, W., Chmielecki, J., Beer, D.G., Cope, L., Creighton, C.J., Danilova, L., et al. (2014). Comprehensive molecular profiling of lung adenocarcinoma. Nature 511, 543-550.
+
+Dobin, A., Davis, C.A., Schlesinger, F., Drenkow, J., Zaleski, C., Jha, S., Batut, P., Chaisson, M., and Gingeras, T.R. (2012). STAR: ultrafast universal RNA-seq aligner. Bioinformatics (Oxford, England) 29, 15-21.
+
+Hanahan, D. (2022). Hallmarks of Cancer: New Dimensions. Cancer Discovery 12, 31-46.
+
+Herbst, R.S., Morgensztern, D., and Boshoff, C. (2018). The biology and management of non-small cell lung cancer. Nature 553, 446.
+
+Love, M.I., Huber, W., and Anders, S. (2014). Moderated estimation of fold change and dispersion for RNA-seq data with DESeq2. Genome Biology 15, 550.
+
+Siegel, R.L., Giaquinto, A.N., and Jemal, A. (2024). Cancer statistics, 2024. CA: a cancer journal for clinicians 74, 12-49.
+
+Soffietti, R., Ahluwalia, M., Lin, N., and Rudà, R. (2020). Management of brain metastases according to molecular subtypes. Nature Reviews Neurology 16, 557-574.
+
+Sompel, K., Elango, A., Smith, A.J., and Tennis, M.A. (2021). Cancer chemoprevention through Frizzled receptors and EMT. Discover Oncology 12, 32.
+
+Suh, J.H., Kotecha, R., Chao, S.T., Ahluwalia, M.S., Sahgal, A., and Chang, E.L. (2020). Current approaches to the management of brain metastases. Nature Reviews Clinical Oncology 17, 279-299.
+
+Wang, H.-Y., Wang, W., Liu, Y.-W., Li, M.-Y., Liang, T.-Y., Li, J.-Y., Hu, H.-M., Lu, Y., Yao, C., Ye, Y.-Y., et al. (2017). Role of KCNB1 in the prognosis of gliomas and autophagy modulation. Scientific reports 7, 14.
+
+Xu, S., Hu, E., Cai, Y., Xie, Z., Luo, X., Zhan, L., Tang, W., Wang, Q., Liu, B., Wang, R., et al. (2024). Using clusterProfiler to characterize multiomics data. Nature Protocols 19, 3292-3320.
+
+Yu, G., Wang, L.-G., Han, Y., and He, Q.-Y. (2012). clusterProfiler: an R Package for Comparing Biological Themes Among Gene Clusters. OMICS: A Journal of Integrative Biology 16, 284-287.
+
+Zhu, A., Ibrahim, J.G., and Love, M.I. (2018). Heavy-tailed prior distributions for sequence count data: removing the noise and preserving large differences. Bioinformatics (Oxford, England) 35, 2084-2092.
+
