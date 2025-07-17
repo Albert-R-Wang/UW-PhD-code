@@ -78,6 +78,10 @@ subplot(2,2,4), imshow(I{2},[]),title('Foci intensity');
 % Prompt user for thresholds
 nuc_thresh  = input('Enter nucleus threshold (0–255): ');    % Fraction for imbinarize
 foci_thresh = input('Enter foci threshold (0–255): ');    % Intensity cutoff
+
+% The pipeline supports two thresholding modes: dynamic mode applies nucleus-specific thresholds 
+% to account for local intensity variation, while universal mode uses a global threshold for all nuclei 
+% to ensure consistency across the dataset.
 mode_sel    = input('Threshold mode: dynamic (1) or universal (2)? ');
 
 %% =============================================================================
