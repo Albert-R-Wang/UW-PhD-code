@@ -12,6 +12,11 @@
 % DNA damage and the cellular response to genotoxic stress, such as 
 % radiation therapy.
 % 
+% Example usage: https://doi.org/10.1158/1535-7163.MCT-17-0897
+% Elsaid, M., Shahi De, A., Wang, A., Baiu, D., Li, C., Werner, L., . . . Otto, M. (2018). 
+% Enhanced Radiosensitivity in Solid Tumors using a Tumor-Selective Alkyl Phosphocholine Analog. 
+% Mol Cancer Ther, 17, molcanther.0897.2017.
+% 
 % This script reads nucleus and foci TIFF images from user selection,
 % converts each to a summed-intensity grayscale map,
 % applies either dynamic or universal thresholding,
