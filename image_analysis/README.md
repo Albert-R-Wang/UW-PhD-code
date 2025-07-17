@@ -6,6 +6,8 @@ This folder contains MATLAB scripts for microscopy image analysis, including too
 
 - `fociCount.m`: A semi-automated pipeline for quantifying γH2AX foci at the single-cell level, with support for dynamic and universal thresholding, per-nucleus metric extraction, and annotated outputs.
   - `fociCount_workflow.pdf`: A workflow overview document that describes the foci counting pipeline and guides users through image processing.
+- `AR_translocation_analysis.m`: This script quantifies androgen receptor (AR) nuclear translocation by calculating nucleus-to-cytoplasm signal ratios from TIFF images, with user-defined thresholding, region segmentation, and export of annotated overlays.
+  - `AR_translocation_analysis.pdf`
 - More will be added overtime
 
 ## Notes
