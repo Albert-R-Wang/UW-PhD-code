@@ -1,7 +1,7 @@
 % ------------------------------------------------------------------------------
-% Title:         Foci Counting Pipeline
+% Title:         Nucleus Foci Counting Pipeline
 % Author:        Albert Wang
-% Last updated:  2025-07-14
+% Last updated:  2025-07-17
 % ------------------------------------------------------------------------------
 
 %% Summary
@@ -12,6 +12,16 @@
 % computes per-nucleus intensity statistics and foci counts,
 % writes results to an Excel file,
 % and saves an annotated segmentation JPEG with colored nucleus indices.
+
+%% Script Outline
+% 1. Data Import and Intensity Conversion
+% 2. Preview Images
+% 3. Threshold Selection
+% 4. Nucleus Masking
+% 5. Foci Masking and Filtering
+% 6. Per-Cell Metric Computation
+% 7. Export Results to Excel
+% 8. Segmentation Visualization and JPEG Export
 
 %% =============================================================================
 % Required toolbox: Image Processing Toolbox
