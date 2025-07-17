@@ -12,6 +12,12 @@
 % computes per-nucleus intensity statistics and foci counts,
 % writes results to an Excel file,
 % and saves an annotated segmentation JPEG with colored nucleus indices.
+% 
+% Quantifying γH2AX foci offers a sensitive and reliable measure of DNA
+% double-strand breaks, enabling researchers to evaluate both the extent
+% of DNA damage and the cellular response to genotoxic stress, such as
+% radiation therapy.
+
 
 %% Script Outline
 % 1. Data Import and Intensity Conversion
